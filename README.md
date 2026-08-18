@@ -1,6 +1,16 @@
 # WOOP Pod resource guardrail
 
-Admission webhook preventing CAST AI Workload Autoscaler Recommendations from exceeding aggregate Pod CPU or memory budgets.
+Admission webhook preventing CAST AI Workload Autoscaler (WOOP) Recommendations from exceeding aggregate Pod CPU or memory budgets.
+
+## What it does
+
+When WOOP creates or updates a `Recommendation` for a protected workload, this guardrail:
+
+1. Reads the CPU and memory budgets from the target workload annotations.
+2. Validates that the Recommendation covers exactly the containers in the workload.
+3. Sums the recommended container requests.
+4. Allows the Recommendation if both totals are within budget.
+5. Denies the Recommendation and disables WOOP for the workload if either total exceeds its budget.
 
 ## Prerequisites
 
@@ -8,9 +18,9 @@ Admission webhook preventing CAST AI Workload Autoscaler Recommendations from ex
 - Helm 3
 - cert-manager installed (default TLS option)
 
-## Contract
+## Opt-in contract
 
-Opt in by annotating a WOOP-managed Deployment, StatefulSet, ReplicaSet, DaemonSet, or Argo Rollout:
+Protect a workload by adding annotations to its `Deployment`, `StatefulSet`, `ReplicaSet`, `DaemonSet`, or Argo `Rollout`:
 
 ```yaml
 metadata:
@@ -19,26 +29,144 @@ metadata:
     guardrail.woop.cast.ai/max-pod-memory: "60Gi"
 ```
 
-Recommendations within both budgets pass. If either total exceeds its budget, Kubernetes rejects the Recommendation CREATE/UPDATE. Workloads without either annotation pass unchanged.
+- Budgets are **per-pod aggregate** limits, not per-container limits.
+- CPU and memory quantities follow Kubernetes resource quantity syntax (`100m`, `1.5`, `60Gi`, `128Mi`).
+- A workload with **neither** annotation passes through unchanged.
+- Annotations can be added or removed at any time.
 
-## Flow
+## Flow diagrams
+
+### High-level decision flow
 
 ```text
-WOOP Recommendation CREATE/UPDATE
-              ↓
-Webhook reads target workload budget
-              ↓
-Sum all recommended container requests
-              ↓
-CPU and memory within budget?
-        yes /       \ no
-           ↓         ↓
-         allow      deny + durable disable job
-                              ↓
-                    controller retries conflict-safe patch
-                              ↓
+                    WOOP Recommendation CREATE/UPDATE
+                                │
+                                ▼
+         ┌─────────────────────────────────────────────────────┐
+         │  Webhook reads target workload budget annotations   │
+         └─────────────────────────────────────────────────────┘
+                                │
+                                ▼
+         ┌─────────────────────────────────────────────────────┐
+         │  Validate container list matches target workload    │
+         └─────────────────────────────────────────────────────┘
+                                │
+                mismatch / empty ──────► deny
+                                │
+                                ▼
+         ┌─────────────────────────────────────────────────────┐
+         │  Sum all recommended container requests             │
+         └─────────────────────────────────────────────────────┘
+                                │
+                                ▼
+                    within both budgets?
+                    yes /           \
+                   /                  \
+                  ▼                    ▼
+              allow              deny + enqueue
+              Recommendation   disable job
+                                │
+                                ▼
+                    controller patches workload:
                     vertical.optimization: off
 ```
+
+### Safe recommendation path
+
+```text
+WOUP creates/updates Recommendation
+              │
+              ▼
+Workload has guardrail budget annotations
+              │
+              ▼
+Container list matches workload spec
+              │
+              ▼
+Aggregate CPU  ≤ max-pod-cpu
+Aggregate memory ≤ max-pod-memory
+              │
+              ▼
+        ✅ Recommendation allowed
+        WOOP continues optimizing the workload
+```
+
+### Unsafe recommendation path
+
+```text
+WOUP creates/updates Recommendation
+              │
+              ▼
+Workload has guardrail budget annotations
+              │
+              ▼
+Container list matches workload spec
+              │
+              ▼
+Aggregate CPU  > max-pod-cpu
+        OR
+Aggregate memory > max-pod-memory
+              │
+              ▼
+        ❌ Recommendation denied
+        Error: "aggregate CPU request X exceeds pod budget Y; WOOP disable queued"
+              │
+              ▼
+        Disable job written to guardrail namespace (ConfigMap)
+              │
+              ▼
+        Remediation controller picks up job (retries on conflict)
+              │
+              ▼
+        Workload annotated:
+        workloads.cast.ai/configuration.vertical.optimization = "off"
+              │
+              ▼
+        Job deleted after successful patch
+```
+
+### Server-side dry-run path
+
+```text
+kubectl apply --dry-run=server -f recommendation-unsafe.yaml
+              │
+              ▼
+        Webhook evaluates budget
+              │
+              ▼
+        ❌ Request denied with budget message
+              │
+              ▼
+        ⚠️  No disable job enqueued
+        ⚠️  Workload is NOT patched
+        (safe to use in CI / validation pipelines)
+```
+
+## Expected behavior
+
+| Scenario | Webhook verdict | Workload patched | Disable job queued | Recommendation persisted |
+|---|---|---|---|---|
+| Workload has no budget annotations | Allowed | No | No | Yes |
+| Safe recommendation within budgets | Allowed | No | No | Yes |
+| Unsafe recommendation (real apply) | Denied | Yes (`optimization: off`) | Yes | No |
+| Unsafe recommendation (server dry-run) | Denied | No | No | No |
+| Missing/duplicate/unknown container in Recommendation | Denied | No | No | No |
+| Invalid budget annotation value | Denied | No | No | No |
+| Kubernetes API lookup failure | Denied | No | No | No |
+
+## Error messages you will see
+
+| Situation | Message |
+|---|---|
+| CPU overflow | `aggregate CPU request <total> exceeds pod budget <budget>; WOOP disable queued` |
+| Memory overflow | `aggregate memory request <total> exceeds pod budget <budget>; WOOP disable queued` |
+| Dry-run CPU overflow | `aggregate CPU request <total> exceeds pod budget <budget>; dry-run: WOOP disable not queued` |
+| Missing container | `Recommendation is missing container "<name>"` |
+| Unknown/duplicate container | `Recommendation has unknown or duplicate container "<name>"` |
+| Missing budgeted CPU request | `Recommendation container "<name>" is missing CPU request` |
+| Missing budgeted memory request | `Recommendation container "<name>" is missing memory request` |
+| Invalid budget quantity | `CPU budget: ...` / `memory budget: ...` |
+| Negative quantity | `container "<name>" CPU request must not be negative` |
 
 ## Install
 
@@ -117,3 +245,42 @@ kubectl apply --dry-run=server -f examples/recommendation-unsafe-memory.yaml
 ```
 
 Expected: safe fixture accepted; CPU and memory overflow fixtures denied with calculated totals.
+
+## Performance and timing
+
+Observed in a local k3d cluster with 10-replica workloads:
+
+- Webhook evaluation latency: **sub-second** for a single Recommendation.
+- Remediation latency: **< 2 seconds** from denial to workload patch in normal conditions.
+- The controller polls for disable jobs every **2 seconds**.
+
+Production latency depends on API server load, etcd latency, and webhook replica count.
+
+## Troubleshooting
+
+### Workload is not being protected
+
+- Confirm the workload kind is supported: `Deployment`, `StatefulSet`, `ReplicaSet`, `DaemonSet`, or Argo `Rollout`.
+- Confirm annotations are on the **workload** metadata, not the pod template metadata.
+- Confirm at least one of `guardrail.woop.cast.ai/max-pod-cpu` or `guardrail.woop.cast.ai/max-pod-memory` is set.
+- Check the webhook is registered: `kubectl get validatingwebhookconfiguration`.
+- Check guardrail pods are running: `kubectl get pods -n woop-guardrail-system`.
+
+### Unsafe Recommendation is not being denied
+
+- Confirm the Recommendation `apiVersion` is `autoscaling.cast.ai/v1` and the webhook rule matches it.
+- Check webhook logs for decode or lookup errors.
+- Verify the `failurePolicy` is `Fail` in the `ValidatingWebhookConfiguration`.
+
+### Workload was disabled but I want to re-enable WOOP
+
+- Remove `vertical.optimization: off` from the `workloads.cast.ai/configuration` annotation, or set it back to `on`.
+- Ensure the next Recommendation is within budget; otherwise the guardrail will disable it again.
+
+### Dry-run passes but real apply fails
+
+This is expected behavior. Dry-run does not enqueue the disable job or patch the workload, but it still evaluates the budget and returns a denial if the Recommendation is unsafe.
+
+## License
+
+See [LICENSE](LICENSE).
