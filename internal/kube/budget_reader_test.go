@@ -3,7 +3,7 @@ package kube
 import (
 	"testing"
 
-	"github.com/castai-labs/woop-pod-resource-guardrail/internal/webhook"
+	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/webhook"
 )
 
 func TestTargetPath(t *testing.T) {

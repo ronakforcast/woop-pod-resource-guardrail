@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/castai-labs/woop-pod-resource-guardrail/internal/kube"
-	"github.com/castai-labs/woop-pod-resource-guardrail/internal/webhook"
+	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/kube"
+	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/webhook"
 )
 
 func main() {

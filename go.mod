@@ -1,4 +1,4 @@
-module github.com/castai-labs/woop-pod-resource-guardrail
+module github.com/ronakforcast/woop-pod-resource-guardrail
 
 go 1.26.0
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/castai-labs/woop-pod-resource-guardrail/internal/guardrail"
+	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/guardrail"
 )
 
 type TargetRef struct {

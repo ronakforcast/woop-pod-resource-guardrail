@@ -13,8 +13,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/castai-labs/woop-pod-resource-guardrail/internal/guardrail"
-	"github.com/castai-labs/woop-pod-resource-guardrail/internal/webhook"
+	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/guardrail"
+	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/webhook"
 )
 
 const (

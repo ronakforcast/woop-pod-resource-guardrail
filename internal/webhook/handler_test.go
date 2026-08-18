@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/castai-labs/woop-pod-resource-guardrail/internal/guardrail"
+	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/guardrail"
 )
 
 type fakeBudgetReader struct {
