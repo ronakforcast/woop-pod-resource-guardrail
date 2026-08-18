@@ -2,8 +2,8 @@ apiVersion: v2
 name: woop-pod-resource-guardrail
 description: Admission guardrail for aggregate WOOP Pod CPU and memory recommendations
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 home: https://github.com/ronakforcast/woop-pod-resource-guardrail
 sources:
   - https://github.com/ronakforcast/woop-pod-resource-guardrail

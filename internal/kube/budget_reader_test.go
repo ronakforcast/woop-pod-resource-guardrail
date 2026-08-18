@@ -1,10 +1,52 @@
 package kube
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/webhook"
 )
+
+func TestDisableOptimizationPreservesWOOPConfiguration(t *testing.T) {
+	var patched string
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		switch request.Method {
+		case http.MethodGet:
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"metadata":{"annotations":{"workloads.cast.ai/configuration":"scalingPolicyName: customer-policy\nvertical:\n  cpu:\n    max: 12\n  optimization: on\n"}}}`))}, nil
+		case http.MethodPatch:
+			var body struct {
+				Metadata struct {
+					Annotations map[string]string `json:"annotations"`
+				} `json:"metadata"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			patched = body.Metadata.Annotations[WOOPConfigurationAnnotation]
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(""))}, nil
+		default:
+			t.Fatalf("unexpected method %s", request.Method)
+		}
+		return nil, nil
+	})}
+	reader := &BudgetReader{baseURL: "https://kubernetes.test", token: "test", client: client}
+	if err := reader.DisableOptimization(context.Background(), webhook.TargetRef{APIVersion: "apps/v1", Kind: "Deployment", Name: "payments"}, "ns"); err != nil {
+		t.Fatal(err)
+	}
+	if patched != "scalingPolicyName: customer-policy\nvertical:\n  cpu:\n    max: 12\n  optimization: \"off\"\n" {
+		t.Fatalf("unexpected patched configuration:\n%s", patched)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
 
 func TestTargetPath(t *testing.T) {
 	tests := map[string]string{

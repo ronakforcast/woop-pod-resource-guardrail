@@ -23,16 +23,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
       - name: Build and publish image
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:0.1.0
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -40,4 +46,4 @@ jobs:
       - name: Package and publish Helm chart
         run: |
           helm package chart --destination /tmp
-          helm push /tmp/woop-pod-resource-guardrail-0.1.0.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+          helm push /tmp/woop-pod-resource-guardrail-*.tgz oci://ghcr.io/${{ github.repository_owner }}/charts

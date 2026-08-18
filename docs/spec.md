@@ -7,4 +7,5 @@
 - Reject recommendations exceeding either budget.
 - Fail closed for malformed recommendations, invalid budgets, or workload lookup failures.
 - Support Deployments, StatefulSets, ReplicaSets, DaemonSets, and Argo Rollouts.
-- Do not mutate recommendations, delete existing recommendations, or automatically disable WOOP.
+- Do not mutate recommendations or delete existing recommendations.
+- When a recommendation exceeds a budget, preserve existing WOOP configuration and set target workload `vertical.optimization` to `off`.

@@ -11,6 +11,12 @@ metadata:
   annotations:
     guardrail.woop.cast.ai/max-pod-cpu: "15"
     guardrail.woop.cast.ai/max-pod-memory: "60Gi"
+    workloads.cast.ai/configuration: |
+      scalingPolicyName: customer-policy
+      vertical:
+        cpu:
+          max: 12
+        optimization: on
 spec:
   replicas: 0
   selector:

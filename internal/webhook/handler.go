@@ -17,6 +17,7 @@ type TargetRef struct {
 
 type BudgetReader interface {
 	PolicyFor(ctx context.Context, target TargetRef, namespace string) (Policy, error)
+	DisableOptimization(ctx context.Context, target TargetRef, namespace string) error
 }
 
 type Policy struct {
@@ -152,6 +153,13 @@ func (h *Handler) evaluate(ctx context.Context, request *admissionRequest) admis
 	}
 	response.Allowed = result.Allowed
 	response.Status.Message = result.Message
+	if !result.Allowed {
+		if err := h.budgets.DisableOptimization(ctx, object.Spec.TargetRef, request.Namespace); err != nil {
+			response.Status.Message = fmt.Sprintf("%s; failed to disable WOOP: %v", result.Message, err)
+		} else {
+			response.Status.Message = result.Message + "; WOOP optimization disabled on target workload"
+		}
+	}
 	return response
 }
 

@@ -41,7 +41,7 @@ CPU and memory within budget?
 ```bash
 helm upgrade --install guardrail \
   oci://ghcr.io/ronakforcast/charts/woop-pod-resource-guardrail \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --namespace woop-guardrail-system \
   --create-namespace
 ```
@@ -67,7 +67,7 @@ Without cert-manager, provide an existing TLS Secret and base64 CA bundle:
 ```bash
 helm upgrade --install guardrail \
   oci://ghcr.io/ronakforcast/charts/woop-pod-resource-guardrail \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --namespace woop-guardrail-system \
   --create-namespace \
   --set webhook.certManager.enabled=false \
@@ -94,8 +94,9 @@ docker build -t woop-pod-resource-guardrail:dev .
 
 - `failurePolicy: Fail` by default: unavailable webhook blocks Recommendation writes.
 - Invalid budgets or Kubernetes lookup failures deny the Recommendation.
-- Webhook never mutates CAST Recommendations or workloads.
-- Disabling WOOP after rejection remains an operator action.
+- Webhook never mutates or deletes CAST Recommendations.
+- An unsafe Recommendation is denied and the target workload is patched to set `vertical.optimization: off` inside `workloads.cast.ai/configuration`.
+- Existing WOOP configuration fields are preserved during that patch.
 - Test CAST retry and cleanup behavior before production enforcement.
 
 ## Integration fixtures

@@ -3,6 +3,7 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,8 +13,17 @@ import (
 )
 
 type fakeBudgetReader struct {
-	policy Policy
-	err    error
+	policy       Policy
+	err          error
+	disableCalls *[]TargetRef
+	disableErr   error
+}
+
+func (f fakeBudgetReader) DisableOptimization(_ context.Context, target TargetRef, _ string) error {
+	if f.disableCalls != nil {
+		*f.disableCalls = append(*f.disableCalls, target)
+	}
+	return f.disableErr
 }
 
 func (f fakeBudgetReader) PolicyFor(context.Context, TargetRef, string) (Policy, error) {
@@ -21,7 +31,8 @@ func (f fakeBudgetReader) PolicyFor(context.Context, TargetRef, string) (Policy,
 }
 
 func TestHandlerRejectsRecommendationOverCPUBudget(t *testing.T) {
-	handler := NewHandler(fakeBudgetReader{policy: Policy{Budget: guardrail.Budget{CPU: "15", Memory: "60Gi"}, Containers: []string{"main", "worker", "sidecar"}}})
+	var disabled []TargetRef
+	handler := NewHandler(fakeBudgetReader{policy: Policy{Budget: guardrail.Budget{CPU: "15", Memory: "60Gi"}, Containers: []string{"main", "worker", "sidecar"}}, disableCalls: &disabled})
 	response := review(t, handler, `
 {
   "apiVersion":"admission.k8s.io/v1",
@@ -48,9 +59,26 @@ func TestHandlerRejectsRecommendationOverCPUBudget(t *testing.T) {
 	if response.Response.UID != "cpu-over" {
 		t.Fatalf("response UID = %q", response.Response.UID)
 	}
-	want := "aggregate CPU request 16 exceeds pod budget 15"
+	want := "aggregate CPU request 16 exceeds pod budget 15; WOOP optimization disabled on target workload"
 	if response.Response.Status.Message != want {
 		t.Fatalf("message = %q, want %q", response.Response.Status.Message, want)
+	}
+	if len(disabled) != 1 || disabled[0].Name != "payments" {
+		t.Fatalf("expected payments optimization to be disabled, got %#v", disabled)
+	}
+}
+
+func TestHandlerReportsDisableFailureWhileDenyingRecommendation(t *testing.T) {
+	handler := NewHandler(fakeBudgetReader{
+		policy:     Policy{Budget: guardrail.Budget{CPU: "1"}, Containers: []string{"main"}},
+		disableErr: fmt.Errorf("patch forbidden"),
+	})
+	response := review(t, handler, `{"request":{"uid":"disable-failed","namespace":"customer-workloads","object":{"spec":{"targetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"payments"},"recommendation":[{"containerName":"main","requests":{"cpu":"2"}}]}}}}`)
+	if response.Response.Allowed {
+		t.Fatal("unsafe recommendation must remain denied when disabling fails")
+	}
+	if !strings.Contains(response.Response.Status.Message, "failed to disable WOOP") {
+		t.Fatalf("expected disable failure in response, got %q", response.Response.Status.Message)
 	}
 }
 
