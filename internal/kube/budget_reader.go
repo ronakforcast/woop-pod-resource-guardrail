@@ -3,6 +3,7 @@ package kube
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/guardrail"
 	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/webhook"
@@ -28,9 +30,10 @@ const (
 )
 
 type BudgetReader struct {
-	baseURL string
-	token   string
-	client  *http.Client
+	baseURL        string
+	token          string
+	client         *http.Client
+	queueNamespace string
 }
 
 func (reader *BudgetReader) DisableOptimization(ctx context.Context, target webhook.TargetRef, namespace string) error {
@@ -53,7 +56,8 @@ func (reader *BudgetReader) DisableOptimization(ctx context.Context, target webh
 	}
 	var workload struct {
 		Metadata struct {
-			Annotations map[string]string `json:"annotations"`
+			Annotations     map[string]string `json:"annotations"`
+			ResourceVersion string            `json:"resourceVersion"`
 		} `json:"metadata"`
 	}
 	if err := json.NewDecoder(getResponse.Body).Decode(&workload); err != nil {
@@ -65,17 +69,21 @@ func (reader *BudgetReader) DisableOptimization(ctx context.Context, target webh
 			return fmt.Errorf("parse WOOP configuration: %w", err)
 		}
 	}
-	vertical, ok := configuration["vertical"].(map[string]any)
-	if !ok {
-		vertical = map[string]any{}
-		configuration["vertical"] = vertical
+	vertical, exists := configuration["vertical"]
+	verticalMap, ok := vertical.(map[string]any)
+	if exists && !ok {
+		return fmt.Errorf("WOOP vertical configuration is not an object")
 	}
-	vertical["optimization"] = "off"
+	if !exists {
+		verticalMap = map[string]any{}
+		configuration["vertical"] = verticalMap
+	}
+	verticalMap["optimization"] = "off"
 	encodedConfiguration, err := yaml.Marshal(configuration)
 	if err != nil {
 		return fmt.Errorf("encode WOOP configuration: %w", err)
 	}
-	patchBody, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{
+	patchBody, err := json.Marshal(map[string]any{"metadata": map[string]any{"resourceVersion": workload.Metadata.ResourceVersion, "annotations": map[string]string{
 		WOOPConfigurationAnnotation: string(encodedConfiguration),
 	}}})
 	if err != nil {
@@ -108,6 +116,10 @@ func NewInClusterBudgetReader() (*BudgetReader, error) {
 	if host == "" {
 		return nil, fmt.Errorf("KUBERNETES_SERVICE_HOST is not set")
 	}
+	queueNamespace := os.Getenv("POD_NAMESPACE")
+	if queueNamespace == "" {
+		return nil, fmt.Errorf("POD_NAMESPACE is not set")
+	}
 	token, err := os.ReadFile(serviceAccountToken)
 	if err != nil {
 		return nil, fmt.Errorf("read service account token: %w", err)
@@ -127,7 +139,108 @@ func NewInClusterBudgetReader() (*BudgetReader, error) {
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    roots,
 		}}},
+		queueNamespace: queueNamespace,
 	}, nil
+}
+
+const remediationLabel = "guardrail.woop.cast.ai/remediation"
+
+func (reader *BudgetReader) EnqueueDisable(ctx context.Context, target webhook.TargetRef, namespace string) error {
+	key := fmt.Sprintf("%s/%s/%s/%s", namespace, target.APIVersion, target.Kind, target.Name)
+	name := fmt.Sprintf("woop-disable-%x", sha256.Sum256([]byte(key)))[:29]
+	body, err := json.Marshal(map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name": name, "namespace": reader.queueNamespace,
+			"labels": map[string]string{remediationLabel: "disable"},
+		},
+		"data": map[string]string{
+			"namespace": namespace, "apiVersion": target.APIVersion,
+			"kind": target.Kind, "name": target.Name,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("encode remediation: %w", err)
+	}
+	endpoint := reader.baseURL + "/api/v1/namespaces/" + url.PathEscape(reader.queueNamespace) + "/configmaps"
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("create remediation request: %w", err)
+	}
+	request.Header.Set("Authorization", "Bearer "+reader.token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := reader.client.Do(request)
+	if err != nil {
+		return fmt.Errorf("create remediation: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusConflict {
+		return nil
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("create remediation: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+func (reader *BudgetReader) RunRemediationController(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		reader.processRemediations(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (reader *BudgetReader) processRemediations(ctx context.Context) {
+	endpoint := reader.baseURL + "/api/v1/namespaces/" + url.PathEscape(reader.queueNamespace) +
+		"/configmaps?labelSelector=" + url.QueryEscape(remediationLabel+"=disable")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return
+	}
+	request.Header.Set("Authorization", "Bearer "+reader.token)
+	response, err := reader.client.Do(request)
+	if err != nil {
+		return
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Data map[string]string `json:"data"`
+		} `json:"items"`
+	}
+	if json.NewDecoder(response.Body).Decode(&list) != nil {
+		return
+	}
+	for _, item := range list.Items {
+		target := webhook.TargetRef{APIVersion: item.Data["apiVersion"], Kind: item.Data["kind"], Name: item.Data["name"]}
+		if reader.DisableOptimization(ctx, target, item.Data["namespace"]) != nil {
+			continue
+		}
+		deleteURL := reader.baseURL + "/api/v1/namespaces/" + url.PathEscape(reader.queueNamespace) + "/configmaps/" + url.PathEscape(item.Metadata.Name)
+		deleteRequest, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
+		if err != nil {
+			continue
+		}
+		deleteRequest.Header.Set("Authorization", "Bearer "+reader.token)
+		deleteResponse, err := reader.client.Do(deleteRequest)
+		if err == nil {
+			deleteResponse.Body.Close()
+		}
+	}
 }
 
 func (reader *BudgetReader) PolicyFor(ctx context.Context, target webhook.TargetRef, namespace string) (webhook.Policy, error) {

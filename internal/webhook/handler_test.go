@@ -19,7 +19,7 @@ type fakeBudgetReader struct {
 	disableErr   error
 }
 
-func (f fakeBudgetReader) DisableOptimization(_ context.Context, target TargetRef, _ string) error {
+func (f fakeBudgetReader) EnqueueDisable(_ context.Context, target TargetRef, _ string) error {
 	if f.disableCalls != nil {
 		*f.disableCalls = append(*f.disableCalls, target)
 	}
@@ -59,7 +59,7 @@ func TestHandlerRejectsRecommendationOverCPUBudget(t *testing.T) {
 	if response.Response.UID != "cpu-over" {
 		t.Fatalf("response UID = %q", response.Response.UID)
 	}
-	want := "aggregate CPU request 16 exceeds pod budget 15; WOOP optimization disabled on target workload"
+	want := "aggregate CPU request 16 exceeds pod budget 15; WOOP disable queued"
 	if response.Response.Status.Message != want {
 		t.Fatalf("message = %q, want %q", response.Response.Status.Message, want)
 	}
@@ -77,8 +77,17 @@ func TestHandlerReportsDisableFailureWhileDenyingRecommendation(t *testing.T) {
 	if response.Response.Allowed {
 		t.Fatal("unsafe recommendation must remain denied when disabling fails")
 	}
-	if !strings.Contains(response.Response.Status.Message, "failed to disable WOOP") {
+	if !strings.Contains(response.Response.Status.Message, "failed to queue WOOP disable") {
 		t.Fatalf("expected disable failure in response, got %q", response.Response.Status.Message)
+	}
+}
+
+func TestHandlerDryRunDoesNotQueueDisable(t *testing.T) {
+	var disabled []TargetRef
+	handler := NewHandler(fakeBudgetReader{policy: Policy{Budget: guardrail.Budget{CPU: "1"}, Containers: []string{"main"}}, disableCalls: &disabled})
+	response := review(t, handler, `{"request":{"uid":"dry","dryRun":true,"namespace":"customer-workloads","object":{"spec":{"targetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"payments"},"recommendation":[{"containerName":"main","requests":{"cpu":"2"}}]}}}}`)
+	if response.Response.Allowed || len(disabled) != 0 || !strings.Contains(response.Response.Status.Message, "dry-run") {
+		t.Fatalf("dry-run must deny without queueing: allowed=%v calls=%v message=%q", response.Response.Allowed, disabled, response.Response.Status.Message)
 	}
 }
 

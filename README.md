@@ -33,7 +33,11 @@ Sum all recommended container requests
 CPU and memory within budget?
         yes /       \ no
            ↓         ↓
-         allow      deny
+         allow      deny + durable disable job
+                              ↓
+                    controller retries conflict-safe patch
+                              ↓
+                    vertical.optimization: off
 ```
 
 ## Install
@@ -97,6 +101,8 @@ docker build -t woop-pod-resource-guardrail:dev .
 - Webhook never mutates or deletes CAST Recommendations.
 - An unsafe Recommendation is denied and the target workload is patched to set `vertical.optimization: off` inside `workloads.cast.ai/configuration`.
 - Existing WOOP configuration fields are preserved during that patch.
+- Disable jobs are ConfigMaps in the guardrail namespace. They remain queued and retry until the workload patch succeeds.
+- Server-side dry-run rejects unsafe input but does not enqueue a disable job or mutate the workload.
 - Test CAST retry and cleanup behavior before production enforcement.
 
 ## Integration fixtures

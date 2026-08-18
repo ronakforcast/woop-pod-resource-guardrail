@@ -9,7 +9,7 @@ metadata:
 webhooks:
   - name: recommendations.guardrail.woop.cast.ai
     admissionReviewVersions: ["v1"]
-    sideEffects: None
+    sideEffects: NoneOnDryRun
     failurePolicy: {{ .Values.webhook.failurePolicy }}
     timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
     clientConfig:

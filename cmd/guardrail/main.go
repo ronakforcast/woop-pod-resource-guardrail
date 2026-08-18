@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/ronakforcast/woop-pod-resource-guardrail/internal/kube"
@@ -15,6 +18,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("initialize Kubernetes client: %v", err)
 	}
+	controllerContext, stopController := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stopController()
+	go reader.RunRemediationController(controllerContext)
 	port := env("PORT", "8443")
 	certFile := env("TLS_CERT_FILE", "/tls/tls.crt")
 	keyFile := env("TLS_KEY_FILE", "/tls/tls.key")
