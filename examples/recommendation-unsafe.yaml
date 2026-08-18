@@ -11,12 +11,8 @@ spec:
   recommendation:
     - containerName: main
       requests:
-        cpu: "10"
+        cpu: "14"
         memory: 40Gi
-    - containerName: worker
-      requests:
-        cpu: "4"
-        memory: 10Gi
     - containerName: sidecar
       requests:
         cpu: "2"
