@@ -10,7 +10,6 @@ spec:
   selector:
     matchLabels:
       {{- include "guardrail.labels" . | nindent 6 }}
-      app.kubernetes.io/component: webhook
   template:
     metadata:
       labels:

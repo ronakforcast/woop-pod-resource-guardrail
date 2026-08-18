@@ -3,18 +3,21 @@ kind: Deployment
 metadata:
   name: {{ include "guardrail.fullname" . }}-controller
   labels:
-    {{- include "guardrail.labels" . | nindent 4 }}
+    app.kubernetes.io/name: {{ include "guardrail.name" . }}-controller
+    app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: controller
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "guardrail.labels" . | nindent 6 }}
+      app.kubernetes.io/name: {{ include "guardrail.name" . }}-controller
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: controller
   template:
     metadata:
       labels:
-        {{- include "guardrail.labels" . | nindent 8 }}
+        app.kubernetes.io/name: {{ include "guardrail.name" . }}-controller
+        app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: controller
     spec:
       serviceAccountName: {{ include "guardrail.fullname" . }}
