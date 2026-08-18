@@ -1,0 +1,131 @@
+package webhook
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/castai-labs/woop-pod-resource-guardrail/internal/guardrail"
+)
+
+type TargetRef struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+}
+
+type BudgetReader interface {
+	BudgetFor(ctx context.Context, target TargetRef, namespace string) (guardrail.Budget, error)
+}
+
+type Handler struct {
+	budgets BudgetReader
+}
+
+func NewHandler(budgets BudgetReader) http.Handler {
+	return &Handler{budgets: budgets}
+}
+
+type admissionReview struct {
+	APIVersion string             `json:"apiVersion,omitempty"`
+	Kind       string             `json:"kind,omitempty"`
+	Request    *admissionRequest  `json:"request,omitempty"`
+	Response   *admissionResponse `json:"response,omitempty"`
+}
+
+type admissionRequest struct {
+	UID       string          `json:"uid"`
+	Namespace string          `json:"namespace"`
+	Object    json.RawMessage `json:"object"`
+}
+
+type admissionResponse struct {
+	UID     string          `json:"uid"`
+	Allowed bool            `json:"allowed"`
+	Status  admissionStatus `json:"status,omitempty"`
+}
+
+type admissionStatus struct {
+	Message string `json:"message,omitempty"`
+}
+
+type recommendation struct {
+	Spec struct {
+		TargetRef      TargetRef                 `json:"targetRef"`
+		Recommendation []containerRecommendation `json:"recommendation"`
+	} `json:"spec"`
+}
+
+type containerRecommendation struct {
+	ContainerName string `json:"containerName"`
+	Requests      struct {
+		CPU    string `json:"cpu"`
+		Memory string `json:"memory"`
+	} `json:"requests"`
+}
+
+func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		http.Error(writer, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var review admissionReview
+	if err := json.NewDecoder(request.Body).Decode(&review); err != nil {
+		http.Error(writer, fmt.Sprintf("decode AdmissionReview: %v", err), http.StatusBadRequest)
+		return
+	}
+	if review.Request == nil {
+		http.Error(writer, "AdmissionReview request is required", http.StatusBadRequest)
+		return
+	}
+	response := h.evaluate(request.Context(), review.Request)
+	writeReview(writer, review.Request.UID, response)
+}
+
+func (h *Handler) evaluate(ctx context.Context, request *admissionRequest) admissionResponse {
+	response := admissionResponse{UID: request.UID, Allowed: false}
+	var object recommendation
+	if err := json.Unmarshal(request.Object, &object); err != nil {
+		response.Status.Message = fmt.Sprintf("decode Recommendation: %v", err)
+		return response
+	}
+	if object.Spec.TargetRef.Name == "" || object.Spec.TargetRef.Kind == "" {
+		response.Status.Message = "Recommendation spec.targetRef name and kind are required"
+		return response
+	}
+	budget, err := h.budgets.BudgetFor(ctx, object.Spec.TargetRef, request.Namespace)
+	if err != nil {
+		response.Status.Message = fmt.Sprintf("read workload budget: %v", err)
+		return response
+	}
+	containers := make([]guardrail.ContainerRecommendation, 0, len(object.Spec.Recommendation))
+	for _, item := range object.Spec.Recommendation {
+		containers = append(containers, guardrail.ContainerRecommendation{
+			Name:   item.ContainerName,
+			CPU:    item.Requests.CPU,
+			Memory: item.Requests.Memory,
+		})
+	}
+	result, err := guardrail.Evaluate(budget, containers)
+	if err != nil {
+		response.Status.Message = fmt.Sprintf("evaluate pod resource budget: %v", err)
+		return response
+	}
+	response.Allowed = result.Allowed
+	response.Status.Message = result.Message
+	return response
+}
+
+func writeReview(writer http.ResponseWriter, uid string, response admissionResponse) {
+	response.UID = uid
+	review := admissionReview{
+		APIVersion: "admission.k8s.io/v1",
+		Kind:       "AdmissionReview",
+		Response:   &response,
+	}
+	writer.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(writer).Encode(review); err != nil {
+		http.Error(writer, err.Error(), http.StatusInternalServerError)
+	}
+}

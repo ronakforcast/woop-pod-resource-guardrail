@@ -1,0 +1,29 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "guardrail.fullname" . }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "guardrail.fullname" . }}
+  {{- end }}
+webhooks:
+  - name: recommendations.guardrail.woop.cast.ai
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.timeoutSeconds }}
+    clientConfig:
+      service:
+        namespace: {{ .Release.Namespace }}
+        name: {{ include "guardrail.fullname" . }}
+        path: /validate
+        port: 443
+      {{- if not .Values.webhook.certManager.enabled }}
+      caBundle: {{ required "webhook.caBundle is required when cert-manager is disabled" .Values.webhook.caBundle | quote }}
+      {{- end }}
+    rules:
+      - apiGroups: ["autoscaling.cast.ai"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["recommendations"]
+        scope: Namespaced

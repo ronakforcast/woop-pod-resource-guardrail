@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: multi-container-example
+  annotations:
+    guardrail.woop.cast.ai/max-pod-cpu: "15"
+    guardrail.woop.cast.ai/max-pod-memory: "60Gi"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: multi-container-example
+  template:
+    metadata:
+      labels:
+        app: multi-container-example
+    spec:
+      containers:
+        - name: main
+          image: nginx:1.29-alpine
+        - name: sidecar
+          image: redis:8-alpine

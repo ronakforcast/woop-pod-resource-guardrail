@@ -1,0 +1,21 @@
+{{- if .Values.webhook.certManager.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "guardrail.fullname" . }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "guardrail.fullname" . }}
+spec:
+  secretName: {{ include "guardrail.tlsSecret" . }}
+  dnsNames:
+    - {{ include "guardrail.fullname" . }}.{{ .Release.Namespace }}.svc
+    - {{ include "guardrail.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: {{ include "guardrail.fullname" . }}
+{{- end }}

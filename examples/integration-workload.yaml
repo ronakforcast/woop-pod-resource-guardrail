@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: woop-guardrail-poc
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: budgeted-workload
+  namespace: woop-guardrail-poc
+  annotations:
+    guardrail.woop.cast.ai/max-pod-cpu: "15"
+    guardrail.woop.cast.ai/max-pod-memory: "60Gi"
+spec:
+  replicas: 0
+  selector:
+    matchLabels:
+      app: budgeted-workload
+  template:
+    metadata:
+      labels:
+        app: budgeted-workload
+    spec:
+      containers:
+        - name: main
+          image: nginx:1.29-alpine
+        - name: sidecar
+          image: redis:8-alpine

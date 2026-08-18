@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "guardrail.fullname" . }}
+  labels:
+    {{- include "guardrail.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "guardrail.labels" . | nindent 4 }}
+  ports:
+    - name: https
+      port: 443
+      targetPort: https

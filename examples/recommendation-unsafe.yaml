@@ -1,0 +1,23 @@
+apiVersion: autoscaling.cast.ai/v1
+kind: Recommendation
+metadata:
+  name: budgeted-workload-unsafe
+  namespace: woop-guardrail-poc
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: budgeted-workload
+  recommendation:
+    - containerName: main
+      requests:
+        cpu: "10"
+        memory: 40Gi
+    - containerName: worker
+      requests:
+        cpu: "4"
+        memory: 10Gi
+    - containerName: sidecar
+      requests:
+        cpu: "2"
+        memory: 2Gi

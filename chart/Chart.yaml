@@ -1,0 +1,6 @@
+apiVersion: v2
+name: woop-pod-resource-guardrail
+description: Admission guardrail for aggregate WOOP Pod CPU and memory recommendations
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

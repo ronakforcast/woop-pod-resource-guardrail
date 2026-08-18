@@ -1,0 +1,22 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/castai-labs/woop-pod-resource-guardrail
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+webhook:
+  failurePolicy: Fail
+  timeoutSeconds: 3
+  certManager:
+    enabled: true
+  existingTLSSecret: ""
+  caBundle: ""
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi
