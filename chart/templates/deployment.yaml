@@ -4,15 +4,18 @@ metadata:
   name: {{ include "guardrail.fullname" . }}
   labels:
     {{- include "guardrail.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webhook
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       {{- include "guardrail.labels" . | nindent 6 }}
+      app.kubernetes.io/component: webhook
   template:
     metadata:
       labels:
         {{- include "guardrail.labels" . | nindent 8 }}
+        app.kubernetes.io/component: webhook
     spec:
       serviceAccountName: {{ include "guardrail.fullname" . }}
       securityContext:
@@ -32,6 +35,8 @@ spec:
             - name: https
               containerPort: 8443
           env:
+            - name: RUN_REMEDIATION_CONTROLLER
+              value: "false"
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

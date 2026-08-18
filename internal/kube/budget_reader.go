@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -135,7 +136,7 @@ func NewInClusterBudgetReader() (*BudgetReader, error) {
 	return &BudgetReader{
 		baseURL: "https://" + host + ":" + port,
 		token:   strings.TrimSpace(string(token)),
-		client: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		client: &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    roots,
 		}}},
@@ -203,15 +204,18 @@ func (reader *BudgetReader) processRemediations(ctx context.Context) {
 		"/configmaps?labelSelector=" + url.QueryEscape(remediationLabel+"=disable")
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
+		log.Printf("create remediation list request: %v", err)
 		return
 	}
 	request.Header.Set("Authorization", "Bearer "+reader.token)
 	response, err := reader.client.Do(request)
 	if err != nil {
+		log.Printf("list remediation jobs: %v", err)
 		return
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		log.Printf("list remediation jobs: HTTP %d", response.StatusCode)
 		return
 	}
 	var list struct {
@@ -223,22 +227,27 @@ func (reader *BudgetReader) processRemediations(ctx context.Context) {
 		} `json:"items"`
 	}
 	if json.NewDecoder(response.Body).Decode(&list) != nil {
+		log.Printf("decode remediation jobs failed")
 		return
 	}
 	for _, item := range list.Items {
 		target := webhook.TargetRef{APIVersion: item.Data["apiVersion"], Kind: item.Data["kind"], Name: item.Data["name"]}
 		if reader.DisableOptimization(ctx, target, item.Data["namespace"]) != nil {
+			log.Printf("remediation %s for %s/%s failed; will retry", item.Metadata.Name, item.Data["namespace"], target.Name)
 			continue
 		}
 		deleteURL := reader.baseURL + "/api/v1/namespaces/" + url.PathEscape(reader.queueNamespace) + "/configmaps/" + url.PathEscape(item.Metadata.Name)
 		deleteRequest, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
 		if err != nil {
+			log.Printf("create delete request for remediation %s: %v", item.Metadata.Name, err)
 			continue
 		}
 		deleteRequest.Header.Set("Authorization", "Bearer "+reader.token)
 		deleteResponse, err := reader.client.Do(deleteRequest)
 		if err == nil {
 			deleteResponse.Body.Close()
+		} else {
+			log.Printf("delete completed remediation %s: %v", item.Metadata.Name, err)
 		}
 	}
 }

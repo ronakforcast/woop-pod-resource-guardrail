@@ -20,7 +20,10 @@ func main() {
 	}
 	controllerContext, stopController := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stopController()
-	go reader.RunRemediationController(controllerContext)
+	if env("RUN_REMEDIATION_CONTROLLER", "false") == "true" {
+		reader.RunRemediationController(controllerContext)
+		return
+	}
 	port := env("PORT", "8443")
 	certFile := env("TLS_CERT_FILE", "/tls/tls.crt")
 	keyFile := env("TLS_KEY_FILE", "/tls/tls.key")
@@ -40,8 +43,16 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 	}
+	go func() {
+		<-controllerContext.Done()
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdownContext); err != nil {
+			log.Printf("shutdown webhook server: %v", err)
+		}
+	}()
 	log.Printf("WOOP pod resource guardrail listening on %s", server.Addr)
-	if err := server.ListenAndServeTLS(certFile, keyFile); err != nil {
+	if err := server.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("serve webhook: %v", err)
 	}
 }
