@@ -30,6 +30,9 @@ func main() {
 		Addr:              ":" + port,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
 	}
 	log.Printf("WOOP pod resource guardrail listening on %s", server.Addr)
 	if err := server.ListenAndServeTLS(certFile, keyFile); err != nil {

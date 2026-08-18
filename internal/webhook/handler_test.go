@@ -12,16 +12,16 @@ import (
 )
 
 type fakeBudgetReader struct {
-	budget guardrail.Budget
+	policy Policy
 	err    error
 }
 
-func (f fakeBudgetReader) BudgetFor(context.Context, TargetRef, string) (guardrail.Budget, error) {
-	return f.budget, f.err
+func (f fakeBudgetReader) PolicyFor(context.Context, TargetRef, string) (Policy, error) {
+	return f.policy, f.err
 }
 
 func TestHandlerRejectsRecommendationOverCPUBudget(t *testing.T) {
-	handler := NewHandler(fakeBudgetReader{budget: guardrail.Budget{CPU: "15", Memory: "60Gi"}})
+	handler := NewHandler(fakeBudgetReader{policy: Policy{Budget: guardrail.Budget{CPU: "15", Memory: "60Gi"}, Containers: []string{"main", "worker", "sidecar"}}})
 	response := review(t, handler, `
 {
   "apiVersion":"admission.k8s.io/v1",
@@ -55,7 +55,7 @@ func TestHandlerRejectsRecommendationOverCPUBudget(t *testing.T) {
 }
 
 func TestHandlerAllowsRecommendationWithinBudgets(t *testing.T) {
-	handler := NewHandler(fakeBudgetReader{budget: guardrail.Budget{CPU: "15", Memory: "60Gi"}})
+	handler := NewHandler(fakeBudgetReader{policy: Policy{Budget: guardrail.Budget{CPU: "15", Memory: "60Gi"}, Containers: []string{"main", "sidecar"}}})
 	response := review(t, handler, `
 {"request":{"uid":"safe","namespace":"customer-workloads","object":{"spec":{
   "targetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"payments"},
@@ -67,6 +67,22 @@ func TestHandlerAllowsRecommendationWithinBudgets(t *testing.T) {
 
 	if !response.Response.Allowed {
 		t.Fatalf("expected safe recommendation to be allowed: %s", response.Response.Status.Message)
+	}
+}
+
+func TestHandlerRejectsIncompleteContainerSet(t *testing.T) {
+	handler := NewHandler(fakeBudgetReader{policy: Policy{Budget: guardrail.Budget{CPU: "15"}, Containers: []string{"main", "sidecar"}}})
+	response := review(t, handler, `{"request":{"uid":"missing","namespace":"customer-workloads","object":{"spec":{"targetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"payments"},"recommendation":[{"containerName":"main","requests":{"cpu":"8"}}]}}}}`)
+	if response.Response.Allowed || response.Response.Status.Message != `Recommendation is missing container "sidecar"` {
+		t.Fatalf("expected missing container denial, got allowed=%v message=%q", response.Response.Allowed, response.Response.Status.Message)
+	}
+}
+
+func TestHandlerRejectsMissingBudgetedResource(t *testing.T) {
+	handler := NewHandler(fakeBudgetReader{policy: Policy{Budget: guardrail.Budget{CPU: "15", Memory: "60Gi"}, Containers: []string{"main"}}})
+	response := review(t, handler, `{"request":{"uid":"missing-memory","namespace":"customer-workloads","object":{"spec":{"targetRef":{"apiVersion":"apps/v1","kind":"Deployment","name":"payments"},"recommendation":[{"containerName":"main","requests":{"cpu":"8"}}]}}}}`)
+	if response.Response.Allowed || !strings.Contains(response.Response.Status.Message, "missing memory") {
+		t.Fatalf("expected missing memory denial, got allowed=%v message=%q", response.Response.Allowed, response.Response.Status.Message)
 	}
 }
 

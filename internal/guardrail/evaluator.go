@@ -34,12 +34,18 @@ func Evaluate(budget Budget, containers []ContainerRecommendation) (Result, erro
 			if err != nil {
 				return Result{}, fmt.Errorf("container %q CPU request: %w", container.Name, err)
 			}
+			if quantity.Sign() < 0 {
+				return Result{}, fmt.Errorf("container %q CPU request must not be negative", container.Name)
+			}
 			totalCPU.Add(quantity)
 		}
 		if container.Memory != "" {
 			quantity, err := resource.ParseQuantity(container.Memory)
 			if err != nil {
 				return Result{}, fmt.Errorf("container %q memory request: %w", container.Name, err)
+			}
+			if quantity.Sign() < 0 {
+				return Result{}, fmt.Errorf("container %q memory request must not be negative", container.Name)
 			}
 			totalMemory.Add(quantity)
 		}
@@ -55,6 +61,9 @@ func Evaluate(budget Budget, containers []ContainerRecommendation) (Result, erro
 		if err != nil {
 			return Result{}, fmt.Errorf("CPU budget: %w", err)
 		}
+		if maxCPU.Sign() < 0 {
+			return Result{}, fmt.Errorf("CPU budget must not be negative")
+		}
 		if totalCPU.Cmp(maxCPU) > 0 {
 			result.Allowed = false
 			result.Message = fmt.Sprintf("aggregate CPU request %s exceeds pod budget %s", totalCPU.String(), maxCPU.String())
@@ -65,6 +74,9 @@ func Evaluate(budget Budget, containers []ContainerRecommendation) (Result, erro
 		maxMemory, err := resource.ParseQuantity(budget.Memory)
 		if err != nil {
 			return Result{}, fmt.Errorf("memory budget: %w", err)
+		}
+		if maxMemory.Sign() < 0 {
+			return Result{}, fmt.Errorf("memory budget must not be negative")
 		}
 		if totalMemory.Cmp(maxMemory) > 0 {
 			result.Allowed = false

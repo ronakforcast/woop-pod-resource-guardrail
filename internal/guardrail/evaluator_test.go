@@ -76,3 +76,23 @@ func TestEvaluateAllowsWhenNoBudgetConfigured(t *testing.T) {
 		t.Fatalf("expected no-budget recommendation to be allowed: %s", result.Message)
 	}
 }
+
+func TestEvaluateRejectsNegativeQuantities(t *testing.T) {
+	tests := []struct {
+		name       string
+		budget     Budget
+		containers []ContainerRecommendation
+	}{
+		{"CPU request", Budget{CPU: "15"}, []ContainerRecommendation{{Name: "bad", CPU: "-1"}}},
+		{"memory request", Budget{Memory: "1Gi"}, []ContainerRecommendation{{Name: "bad", Memory: "-1Mi"}}},
+		{"CPU budget", Budget{CPU: "-1"}, nil},
+		{"memory budget", Budget{Memory: "-1Gi"}, nil},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := Evaluate(test.budget, test.containers); err == nil {
+				t.Fatal("expected negative quantity error")
+			}
+		})
+	}
+}

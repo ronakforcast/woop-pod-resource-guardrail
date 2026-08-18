@@ -61,37 +61,59 @@ func NewInClusterBudgetReader() (*BudgetReader, error) {
 	}, nil
 }
 
-func (reader *BudgetReader) BudgetFor(ctx context.Context, target webhook.TargetRef, namespace string) (guardrail.Budget, error) {
+func (reader *BudgetReader) PolicyFor(ctx context.Context, target webhook.TargetRef, namespace string) (webhook.Policy, error) {
 	resourcePath, err := targetPath(target, namespace)
 	if err != nil {
-		return guardrail.Budget{}, err
+		return webhook.Policy{}, err
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, reader.baseURL+resourcePath, nil)
 	if err != nil {
-		return guardrail.Budget{}, fmt.Errorf("create Kubernetes API request: %w", err)
+		return webhook.Policy{}, fmt.Errorf("create Kubernetes API request: %w", err)
 	}
 	request.Header.Set("Authorization", "Bearer "+reader.token)
 	response, err := reader.client.Do(request)
 	if err != nil {
-		return guardrail.Budget{}, fmt.Errorf("get target workload: %w", err)
+		return webhook.Policy{}, fmt.Errorf("get target workload: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return guardrail.Budget{}, fmt.Errorf("get target workload: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+		return webhook.Policy{}, fmt.Errorf("get target workload: HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var workload struct {
 		Metadata struct {
 			Annotations map[string]string `json:"annotations"`
 		} `json:"metadata"`
+		Spec struct {
+			Template struct {
+				Spec struct {
+					Containers []struct {
+						Name string `json:"name"`
+					} `json:"containers"`
+					InitContainers []struct {
+						Name          string `json:"name"`
+						RestartPolicy string `json:"restartPolicy"`
+					} `json:"initContainers"`
+				} `json:"spec"`
+			} `json:"template"`
+		} `json:"spec"`
 	}
 	if err := json.NewDecoder(response.Body).Decode(&workload); err != nil {
-		return guardrail.Budget{}, fmt.Errorf("decode target workload: %w", err)
+		return webhook.Policy{}, fmt.Errorf("decode target workload: %w", err)
 	}
-	return guardrail.Budget{
+	containers := make([]string, 0, len(workload.Spec.Template.Spec.Containers))
+	for _, container := range workload.Spec.Template.Spec.Containers {
+		containers = append(containers, container.Name)
+	}
+	for _, container := range workload.Spec.Template.Spec.InitContainers {
+		if container.RestartPolicy == "Always" {
+			containers = append(containers, container.Name)
+		}
+	}
+	return webhook.Policy{Budget: guardrail.Budget{
 		CPU:    workload.Metadata.Annotations[CPUBudgetAnnotation],
 		Memory: workload.Metadata.Annotations[MemoryBudgetAnnotation],
-	}, nil
+	}, Containers: containers}, nil
 }
 
 func targetPath(target webhook.TargetRef, namespace string) (string, error) {

@@ -16,7 +16,12 @@ type TargetRef struct {
 }
 
 type BudgetReader interface {
-	BudgetFor(ctx context.Context, target TargetRef, namespace string) (guardrail.Budget, error)
+	PolicyFor(ctx context.Context, target TargetRef, namespace string) (Policy, error)
+}
+
+type Policy struct {
+	Budget     guardrail.Budget
+	Containers []string
 }
 
 type Handler struct {
@@ -70,6 +75,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, "POST required", http.StatusMethodNotAllowed)
 		return
 	}
+	request.Body = http.MaxBytesReader(writer, request.Body, 1<<20)
 	var review admissionReview
 	if err := json.NewDecoder(request.Body).Decode(&review); err != nil {
 		http.Error(writer, fmt.Sprintf("decode AdmissionReview: %v", err), http.StatusBadRequest)
@@ -94,20 +100,52 @@ func (h *Handler) evaluate(ctx context.Context, request *admissionRequest) admis
 		response.Status.Message = "Recommendation spec.targetRef name and kind are required"
 		return response
 	}
-	budget, err := h.budgets.BudgetFor(ctx, object.Spec.TargetRef, request.Namespace)
+	policy, err := h.budgets.PolicyFor(ctx, object.Spec.TargetRef, request.Namespace)
 	if err != nil {
 		response.Status.Message = fmt.Sprintf("read workload budget: %v", err)
 		return response
 	}
+	if len(object.Spec.Recommendation) == 0 {
+		response.Status.Message = "Recommendation spec.recommendation must not be empty"
+		return response
+	}
+	expected := make(map[string]bool, len(policy.Containers))
+	for _, name := range policy.Containers {
+		expected[name] = false
+	}
 	containers := make([]guardrail.ContainerRecommendation, 0, len(object.Spec.Recommendation))
 	for _, item := range object.Spec.Recommendation {
+		if item.ContainerName == "" {
+			response.Status.Message = "Recommendation containerName must not be empty"
+			return response
+		}
+		seen, exists := expected[item.ContainerName]
+		if !exists || seen {
+			response.Status.Message = fmt.Sprintf("Recommendation has unknown or duplicate container %q", item.ContainerName)
+			return response
+		}
+		expected[item.ContainerName] = true
+		if policy.Budget.CPU != "" && item.Requests.CPU == "" {
+			response.Status.Message = fmt.Sprintf("Recommendation container %q is missing CPU request", item.ContainerName)
+			return response
+		}
+		if policy.Budget.Memory != "" && item.Requests.Memory == "" {
+			response.Status.Message = fmt.Sprintf("Recommendation container %q is missing memory request", item.ContainerName)
+			return response
+		}
 		containers = append(containers, guardrail.ContainerRecommendation{
 			Name:   item.ContainerName,
 			CPU:    item.Requests.CPU,
 			Memory: item.Requests.Memory,
 		})
 	}
-	result, err := guardrail.Evaluate(budget, containers)
+	for name, seen := range expected {
+		if !seen {
+			response.Status.Message = fmt.Sprintf("Recommendation is missing container %q", name)
+			return response
+		}
+	}
+	result, err := guardrail.Evaluate(policy.Budget, containers)
 	if err != nil {
 		response.Status.Message = fmt.Sprintf("evaluate pod resource budget: %v", err)
 		return response
