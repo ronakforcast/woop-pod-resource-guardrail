@@ -6,6 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /guardrail ./cmd/guardrail
 
 FROM gcr.io/distroless/static-debian12:nonroot
+LABEL org.opencontainers.image.source="https://github.com/ronakforcast/woop-pod-resource-guardrail"
 COPY --from=build /guardrail /guardrail
 USER 65532:65532
 ENTRYPOINT ["/guardrail"]
